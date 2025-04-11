@@ -1,8 +1,6 @@
 
 import { useChat } from "@/contexts/ChatContext";
-import { Button } from "@/components/ui/button";
 import { UserAvatar } from "@/components/UserAvatar";
-import { MoreVertical, Phone, Video } from "lucide-react";
 
 export function ChatHeader() {
   const { activeChat } = useChat();
@@ -24,7 +22,7 @@ export function ChatHeader() {
     undefined;
   
   return (
-    <div className="h-16 px-4 border-b flex items-center justify-between">
+    <div className="h-16 px-4 border-b flex items-center">
       <div className="flex items-center gap-3">
         {isGroup ? (
           <div className="flex -space-x-2">
@@ -50,18 +48,6 @@ export function ChatHeader() {
             </p>
           )}
         </div>
-      </div>
-
-      <div className="flex items-center gap-1">
-        <Button variant="ghost" size="icon">
-          <Phone size={18} />
-        </Button>
-        <Button variant="ghost" size="icon">
-          <Video size={18} />
-        </Button>
-        <Button variant="ghost" size="icon">
-          <MoreVertical size={18} />
-        </Button>
       </div>
     </div>
   );

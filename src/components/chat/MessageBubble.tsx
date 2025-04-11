@@ -8,6 +8,11 @@ import { Input } from "@/components/ui/input";
 import { Smile, Edit2, Trash, Check, X } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { useAuth } from "@/contexts/AuthContext";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 
 interface MessageBubbleProps {
   message: Message;
@@ -23,7 +28,7 @@ export function MessageBubble({ message, isCurrentUser, sender }: MessageBubbleP
   const [showActions, setShowActions] = useState(false);
   
   // Common emojis for reactions
-  const commonEmojis = ["👍", "❤️", "😂", "😢", "😠", "👏", "🎉"];
+  const commonEmojis = ["👍", "❤️", "😂", "😢", "😠", "👏", "🎉", "💯"];
 
   const handleSaveEdit = async () => {
     if (editedContent.trim() && editedContent !== message.content) {
@@ -138,22 +143,27 @@ export function MessageBubble({ message, isCurrentUser, sender }: MessageBubbleP
             <Button variant="ghost" size="sm" onClick={handleDelete}>
               <Trash size={14} />
             </Button>
-            <div className="relative">
-              <Button variant="ghost" size="sm" onClick={() => {}}>
-                <Smile size={14} />
-              </Button>
-              <div className="absolute right-0 bottom-full mb-2 bg-background shadow rounded-lg p-2 flex gap-1">
-                {commonEmojis.map(emoji => (
-                  <button
-                    key={emoji}
-                    onClick={() => handleAddReaction(emoji)}
-                    className="hover:bg-muted rounded-full p-1 text-lg"
-                  >
-                    {emoji}
-                  </button>
-                ))}
-              </div>
-            </div>
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button variant="ghost" size="sm">
+                  <Smile size={14} />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-auto p-2" align="end">
+                <div className="flex flex-wrap gap-1">
+                  {commonEmojis.map(emoji => (
+                    <Button
+                      key={emoji}
+                      variant="ghost"
+                      className="h-8 w-8 p-0"
+                      onClick={() => handleAddReaction(emoji)}
+                    >
+                      {emoji}
+                    </Button>
+                  ))}
+                </div>
+              </PopoverContent>
+            </Popover>
           </div>
         )}
       </div>

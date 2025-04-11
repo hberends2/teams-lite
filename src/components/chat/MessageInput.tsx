@@ -3,7 +3,14 @@ import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useChat } from "@/contexts/ChatContext";
-import { PaperclipIcon, Send, Smile } from "lucide-react";
+import { Send, Smile } from "lucide-react";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+
+const commonEmojis = ["👍", "❤️", "😂", "😢", "😠", "👏", "🎉", "💯"];
 
 export function MessageInput() {
   const { sendMessage, activeChat } = useChat();
@@ -43,6 +50,13 @@ export function MessageInput() {
     }
   };
 
+  const insertEmoji = (emoji: string) => {
+    setMessage((prev) => prev + emoji);
+    if (textareaRef.current) {
+      textareaRef.current.focus();
+    }
+  };
+
   if (!activeChat) return null;
 
   return (
@@ -58,27 +72,40 @@ export function MessageInput() {
             className="min-h-[60px] max-h-[200px] resize-none pr-12"
             disabled={isSubmitting}
           />
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="absolute right-2 bottom-2"
-          >
-            <Smile size={20} className="text-muted-foreground" />
-          </Button>
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="absolute right-2 bottom-2"
+              >
+                <Smile size={20} className="text-muted-foreground" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-64" align="end" alignOffset={0} sideOffset={5}>
+              <div className="flex flex-wrap gap-2 justify-center">
+                {commonEmojis.map((emoji) => (
+                  <Button
+                    key={emoji}
+                    variant="ghost"
+                    className="h-9 w-9 p-0 text-lg"
+                    onClick={() => insertEmoji(emoji)}
+                  >
+                    {emoji}
+                  </Button>
+                ))}
+              </div>
+            </PopoverContent>
+          </Popover>
         </div>
-        <div className="flex gap-2">
-          <Button type="button" variant="ghost" size="icon">
-            <PaperclipIcon size={20} className="text-muted-foreground" />
-          </Button>
-          <Button 
-            type="submit" 
-            disabled={!message.trim() || isSubmitting}
-            size="icon"
-          >
-            <Send size={18} />
-          </Button>
-        </div>
+        <Button 
+          type="submit" 
+          disabled={!message.trim() || isSubmitting}
+          size="icon"
+        >
+          <Send size={18} />
+        </Button>
       </div>
     </form>
   );
