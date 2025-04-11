@@ -17,7 +17,7 @@ import { UserAvatar } from "@/components/UserAvatar";
 import { useAuth } from "@/contexts/AuthContext";
 import { User, UserStatus } from "@/types";
 import { ChangePasswordForm } from "@/components/auth/ChangePasswordForm";
-import { LogOut, Settings, Key } from "lucide-react";
+import { LogOut, Key } from "lucide-react";
 
 interface StatusOption {
   label: string;
@@ -94,12 +94,6 @@ export function UserMenu() {
           >
             <Key className="mr-2 h-4 w-4" />
             Change Password
-          </DropdownMenuItem>
-          <DropdownMenuItem 
-            className="flex items-center cursor-pointer"
-          >
-            <Settings className="mr-2 h-4 w-4" />
-            Settings
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem 
