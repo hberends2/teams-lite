@@ -17,7 +17,7 @@ import { UserAvatar } from "@/components/UserAvatar";
 import { useAuth } from "@/contexts/AuthContext";
 import { User, UserStatus } from "@/types";
 import { ChangePasswordForm } from "@/components/auth/ChangePasswordForm";
-import { SignOut, Settings, Key } from "lucide-react";
+import { LogOut, Settings, Key } from "lucide-react";
 
 interface StatusOption {
   label: string;
@@ -106,7 +106,7 @@ export function UserMenu() {
             onSelect={() => signOut()}
             className="flex items-center cursor-pointer text-destructive"
           >
-            <SignOut className="mr-2 h-4 w-4" />
+            <LogOut className="mr-2 h-4 w-4" />
             Sign out
           </DropdownMenuItem>
         </DropdownMenuContent>
