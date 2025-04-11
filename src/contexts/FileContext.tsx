@@ -1,8 +1,10 @@
 
-import React, { createContext, useContext, useState } from 'react';
+import React, { createContext, useContext, useState, useEffect } from 'react';
 import { FileUpload } from '@/types';
 import { useAuth } from './AuthContext';
 import { useToast } from '@/hooks/use-toast';
+import { supabase } from '@/lib/supabase';
+import { v4 as uuidv4 } from 'uuid';
 
 type SortField = 'filename' | 'file_type' | 'size' | 'created_at' | 'username';
 type SortDirection = 'asc' | 'desc';
@@ -28,63 +30,74 @@ export const useFiles = () => useContext(FileContext);
 export const FileProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user } = useAuth();
   const { toast } = useToast();
-  const [files, setFiles] = useState<FileUpload[]>([
-    {
-      id: '1',
-      filename: 'Project Plan.docx',
-      file_type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      size: 2500000,
-      url: '#',
-      user_id: '1',
-      description: 'Project timeline and milestones',
-      created_at: new Date().toISOString(),
-      uploader: {
-        id: '1',
-        email: 'john.doe@example.com',
-        username: 'johndoe',
-        full_name: 'John Doe',
-        status: 'online',
-        created_at: new Date().toISOString()
+  const [files, setFiles] = useState<FileUpload[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  // Fetch files when user changes
+  useEffect(() => {
+    const fetchFiles = async () => {
+      if (!user) {
+        setFiles([]);
+        setLoading(false);
+        return;
       }
-    },
-    {
-      id: '2',
-      filename: 'Budget.xlsx',
-      file_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      size: 1800000,
-      url: '#',
-      user_id: '2',
-      description: 'Q3 budget projections',
-      created_at: new Date().toISOString(),
-      uploader: {
-        id: '2',
-        email: 'jane.smith@example.com',
-        username: 'janesmith',
-        full_name: 'Jane Smith',
-        status: 'away',
-        created_at: new Date().toISOString()
+
+      setLoading(true);
+      try {
+        const { data: fileData, error: fileError } = await supabase
+          .from('files')
+          .select('*');
+
+        if (fileError) throw fileError;
+
+        if (fileData) {
+          const filesWithUploaders = await Promise.all(
+            fileData.map(async (file) => {
+              // Fetch the uploader info
+              const { data: uploaderData } = await supabase
+                .from('profiles')
+                .select('*')
+                .eq('id', file.user_id)
+                .single();
+
+              // Get the public URL for the file
+              const { data: publicURL } = await supabase
+                .storage
+                .from('file-uploads')
+                .getPublicUrl(file.storage_path);
+
+              return {
+                ...file,
+                url: publicURL?.publicUrl || '',
+                uploader: uploaderData ? {
+                  id: uploaderData.id,
+                  email: uploaderData.email,
+                  username: uploaderData.username,
+                  full_name: uploaderData.full_name,
+                  status: uploaderData.status,
+                  created_at: uploaderData.created_at,
+                  avatar_url: uploaderData.avatar_url
+                } : undefined
+              } as FileUpload;
+            })
+          );
+
+          setFiles(filesWithUploaders);
+        }
+      } catch (error) {
+        console.error('Error fetching files:', error);
+        toast({
+          title: "Failed to load files",
+          description: "There was a problem loading the files.",
+          variant: "destructive",
+        });
+      } finally {
+        setLoading(false);
       }
-    },
-    {
-      id: '3',
-      filename: 'Presentation.pptx',
-      file_type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-      size: 5200000,
-      url: '#',
-      user_id: '3',
-      description: 'Client presentation',
-      created_at: new Date().toISOString(),
-      uploader: {
-        id: '3',
-        email: 'dj.jones@example.com',
-        username: 'djjones',
-        full_name: 'DJ Jones',
-        status: 'online',
-        created_at: new Date().toISOString()
-      }
-    }
-  ]);
-  const [loading, setLoading] = useState(false);
+    };
+
+    fetchFiles();
+  }, [user, toast]);
 
   const uploadFile = async (file: File, description: string) => {
     try {
@@ -92,63 +105,127 @@ export const FileProvider: React.FC<{ children: React.ReactNode }> = ({ children
       
       setLoading(true);
       
-      // In a real app, you would upload to Supabase storage here
-      // For now, we'll just create a mock file object
+      // Create a unique file path
+      const fileExtension = file.name.split('.').pop();
+      const filePath = `${user.id}/${uuidv4()}.${fileExtension}`;
       
-      setTimeout(() => {
-        const newFile: FileUpload = {
-          id: Math.random().toString(36).substring(2, 11),
-          filename: file.name,
-          file_type: file.type,
-          size: file.size,
-          url: URL.createObjectURL(file), // This URL will only work in the current session
-          user_id: user.id,
-          description,
-          created_at: new Date().toISOString(),
-          uploader: user
-        };
+      // Upload file to Supabase storage
+      const { error: storageError } = await supabase
+        .storage
+        .from('file-uploads')
+        .upload(filePath, file);
         
-        setFiles(prev => [newFile, ...prev]);
-        setLoading(false);
+      if (storageError) throw storageError;
+      
+      // Get the public URL
+      const { data: publicURLData } = await supabase
+        .storage
+        .from('file-uploads')
+        .getPublicUrl(filePath);
         
-        toast({
-          title: "File uploaded",
-          description: `${file.name} has been uploaded successfully`,
-        });
-      }, 1500);
+      if (!publicURLData) throw new Error('Failed to get public URL');
+      
+      // Create a record in the files table
+      const newFileRecord = {
+        filename: file.name,
+        file_type: file.type,
+        size: file.size,
+        storage_path: filePath,
+        user_id: user.id,
+        description,
+        created_at: new Date().toISOString()
+      };
+      
+      const { data: fileRecord, error: fileError } = await supabase
+        .from('files')
+        .insert(newFileRecord)
+        .select()
+        .single();
+        
+      if (fileError) throw fileError;
+      
+      // Add to local state
+      const newFile: FileUpload = {
+        ...fileRecord,
+        url: publicURLData.publicUrl,
+        uploader: user
+      };
+      
+      setFiles(prev => [newFile, ...prev]);
+      
+      toast({
+        title: "File uploaded",
+        description: `${file.name} has been uploaded successfully`,
+      });
       
     } catch (error: any) {
-      setLoading(false);
+      console.error('Upload error:', error);
       toast({
         title: "Upload failed",
         description: error.message,
         variant: "destructive",
       });
+      throw error;
+    } finally {
+      setLoading(false);
     }
   };
 
   const deleteFile = async (fileId: string) => {
     try {
+      if (!user) throw new Error('User not authenticated');
+      
       setLoading(true);
       
-      // In a real app, you would delete from Supabase storage here
-      setTimeout(() => {
-        setFiles(prev => prev.filter(file => file.id !== fileId));
-        setLoading(false);
+      // Get file info first (to get storage path)
+      const { data: fileData, error: fetchError } = await supabase
+        .from('files')
+        .select('*')
+        .eq('id', fileId)
+        .single();
         
-        toast({
-          title: "File deleted",
-          description: "The file has been removed",
-        });
-      }, 500);
+      if (fetchError) throw fetchError;
+      if (!fileData) throw new Error('File not found');
+      
+      // Check if user is the owner
+      if (fileData.user_id !== user.id) {
+        throw new Error('You do not have permission to delete this file');
+      }
+      
+      // Delete from storage
+      const { error: storageError } = await supabase
+        .storage
+        .from('file-uploads')
+        .remove([fileData.storage_path]);
+        
+      if (storageError) throw storageError;
+      
+      // Delete from database
+      const { error: dbError } = await supabase
+        .from('files')
+        .delete()
+        .eq('id', fileId);
+        
+      if (dbError) throw dbError;
+      
+      // Update local state
+      setFiles(prev => prev.filter(file => file.id !== fileId));
+      
+      toast({
+        title: "File deleted",
+        description: "The file has been removed",
+      });
       
     } catch (error: any) {
-      setLoading(false);
+      console.error('Delete error:', error);
       toast({
         title: "Delete failed",
         description: error.message,
         variant: "destructive",
       });
+      throw error;
+    } finally {
+      setLoading(false);
     }
   };
 

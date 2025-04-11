@@ -1,8 +1,10 @@
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { Chat, Message, User } from '@/types';
+import { Chat, Message, User, MessageReaction, UserStatus, ChatParticipant } from '@/types';
 import { useAuth } from './AuthContext';
 import { useToast } from '@/hooks/use-toast';
+import { supabase } from '@/lib/supabase';
+import { RealtimeChannel } from '@supabase/supabase-js';
 
 interface ChatContextType {
   chats: Chat[];
@@ -49,191 +51,360 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [users, setUsers] = useState<User[]>([]);
   const [loadingChats, setLoadingChats] = useState(true);
   const [loadingMessages, setLoadingMessages] = useState(false);
+  const [chatSubscription, setChatSubscription] = useState<RealtimeChannel | null>(null);
+  const [messagesSubscription, setMessagesSubscription] = useState<RealtimeChannel | null>(null);
 
-  // Load mock users
+  // Fetch all users
   useEffect(() => {
-    const mockUsers: User[] = [
-      {
-        id: '1',
-        email: 'john.doe@example.com',
-        username: 'johndoe',
-        full_name: 'John Doe',
-        status: 'online',
-        created_at: new Date().toISOString()
-      },
-      {
-        id: '2',
-        email: 'jane.smith@example.com',
-        username: 'janesmith',
-        full_name: 'Jane Smith',
-        status: 'away',
-        created_at: new Date().toISOString()
-      },
-      {
-        id: '3',
-        email: 'dj.jones@example.com',
-        username: 'djjones',
-        full_name: 'DJ Jones',
-        status: 'online',
-        created_at: new Date().toISOString()
+    const fetchUsers = async () => {
+      if (!user) return;
+      
+      try {
+        const { data, error } = await supabase
+          .from('profiles')
+          .select('*')
+          .neq('id', user.id);
+          
+        if (error) throw error;
+        
+        const usersList: User[] = data.map(profile => ({
+          id: profile.id,
+          email: profile.email,
+          username: profile.username,
+          full_name: profile.full_name,
+          status: profile.status as UserStatus,
+          created_at: profile.created_at,
+          avatar_url: profile.avatar_url || undefined
+        }));
+        
+        setUsers(usersList);
+      } catch (error) {
+        console.error('Error fetching users:', error);
       }
-    ];
+    };
     
-    setUsers(mockUsers);
-  }, []);
+    fetchUsers();
+  }, [user]);
 
-  // Load mock chats
+  // Fetch user's chats
   useEffect(() => {
-    if (user) {
-      const mockChats: Chat[] = [
-        {
-          id: '1',
-          name: null,
-          is_group: false,
-          created_at: new Date().toISOString(),
-          participants: [
-            { user_id: user.id, joined_at: new Date().toISOString() },
-            { user_id: '1', joined_at: new Date().toISOString() }
-          ],
-          unread_count: 1
-        },
-        {
-          id: '2',
-          name: null,
-          is_group: false,
-          created_at: new Date().toISOString(),
-          participants: [
-            { user_id: user.id, joined_at: new Date().toISOString() },
-            { user_id: '2', joined_at: new Date().toISOString() }
-          ],
-          unread_count: 0
-        },
-        {
-          id: '3',
-          name: 'Project Team',
-          is_group: true,
-          created_at: new Date().toISOString(),
-          participants: [
-            { user_id: user.id, joined_at: new Date().toISOString() },
-            { user_id: '1', joined_at: new Date().toISOString() },
-            { user_id: '2', joined_at: new Date().toISOString() },
-            { user_id: '3', joined_at: new Date().toISOString() }
-          ],
-          unread_count: 0
+    const fetchChats = async () => {
+      if (!user) {
+        setChats([]);
+        setLoadingChats(false);
+        return;
+      }
+      
+      setLoadingChats(true);
+      
+      try {
+        // Fetch chats where user is a participant
+        const { data: participations, error: participationsError } = await supabase
+          .from('chat_participants')
+          .select('chat_id')
+          .eq('user_id', user.id);
+          
+        if (participationsError) throw participationsError;
+        
+        if (!participations.length) {
+          setChats([]);
+          setLoadingChats(false);
+          return;
         }
-      ];
-
-      // Attach user info to each participant
-      mockChats.forEach(chat => {
-        chat.participants = chat.participants.map(participant => {
-          const participantUser = users.find(u => u.id === participant.user_id) || 
-                                  (participant.user_id === user.id ? user : undefined);
-          return {
-            ...participant,
-            user: participantUser
+        
+        const chatIds = participations.map(p => p.chat_id);
+        
+        // Fetch chat details
+        const { data: chatData, error: chatError } = await supabase
+          .from('chats')
+          .select('*')
+          .in('id', chatIds);
+          
+        if (chatError) throw chatError;
+        
+        // Fetch participants for each chat
+        const chatsWithParticipants = await Promise.all(chatData.map(async (chat) => {
+          const { data: participantData, error: participantError } = await supabase
+            .from('chat_participants')
+            .select('user_id, joined_at')
+            .eq('chat_id', chat.id);
+            
+          if (participantError) throw participantError;
+          
+          // Fetch user details for each participant
+          const participants: ChatParticipant[] = await Promise.all(
+            participantData.map(async (participant) => {
+              if (participant.user_id === user.id) {
+                return {
+                  user_id: user.id,
+                  joined_at: participant.joined_at,
+                  user
+                };
+              }
+              
+              const { data: userData, error: userError } = await supabase
+                .from('profiles')
+                .select('*')
+                .eq('id', participant.user_id)
+                .single();
+                
+              if (userError) {
+                console.error(`Error fetching user ${participant.user_id}:`, userError);
+                return {
+                  user_id: participant.user_id,
+                  joined_at: participant.joined_at
+                };
+              }
+              
+              return {
+                user_id: participant.user_id,
+                joined_at: participant.joined_at,
+                user: userData ? {
+                  id: userData.id,
+                  email: userData.email,
+                  username: userData.username,
+                  full_name: userData.full_name,
+                  status: userData.status as UserStatus,
+                  created_at: userData.created_at,
+                  avatar_url: userData.avatar_url || undefined
+                } : undefined
+              };
+            })
+          );
+          
+          // Count unread messages
+          const { count, error: countError } = await supabase
+            .from('messages')
+            .select('id', { count: 'exact' })
+            .eq('chat_id', chat.id)
+            .not('id', 'in', `(SELECT message_id FROM message_read_status WHERE user_id = '${user.id}')`);
+            
+          const unreadCount = countError ? 0 : (count || 0);
+          
+          // Get last message
+          const { data: lastMessageData, error: lastMessageError } = await supabase
+            .from('messages')
+            .select('*')
+            .eq('chat_id', chat.id)
+            .order('created_at', { ascending: false })
+            .limit(1);
+            
+          const lastMessage = lastMessageError || !lastMessageData.length ? undefined : {
+            ...lastMessageData[0],
+            read_by: [] // Will be populated later if needed
           };
+          
+          return {
+            ...chat,
+            participants,
+            unread_count: unreadCount,
+            last_message: lastMessage
+          };
+        }));
+        
+        setChats(chatsWithParticipants);
+      } catch (error) {
+        console.error('Error fetching chats:', error);
+        toast({
+          title: "Failed to load chats",
+          description: "There was a problem loading your chats.",
+          variant: "destructive",
         });
-      });
-
-      setChats(mockChats);
-      setLoadingChats(false);
+      } finally {
+        setLoadingChats(false);
+      }
+    };
+    
+    fetchChats();
+    
+    // Set up subscription for new chats
+    if (user) {
+      const subscription = supabase
+        .channel('chats-channel')
+        .on('postgres_changes', {
+          event: '*',
+          schema: 'public',
+          table: 'chat_participants',
+          filter: `user_id=eq.${user.id}`
+        }, () => {
+          fetchChats();
+        })
+        .subscribe();
+        
+      setChatSubscription(subscription);
+      
+      return () => {
+        subscription.unsubscribe();
+      };
     }
-  }, [user, users]);
+  }, [user, toast]);
 
-  // Load mock messages when active chat changes
+  // Fetch messages for active chat
   useEffect(() => {
-    if (activeChat) {
+    const fetchMessages = async () => {
+      if (!activeChat || !user) {
+        setMessages([]);
+        return;
+      }
+      
       setLoadingMessages(true);
       
-      // Create mock messages for the active chat
-      const now = new Date();
-      const mockMessages: Message[] = [
-        {
-          id: '1',
-          chat_id: activeChat.id,
-          user_id: activeChat.participants.find(p => p.user_id !== user?.id)?.user_id || '',
-          content: 'Hello! How are you doing today?',
-          created_at: new Date(now.getTime() - 60 * 60000).toISOString(),
-          is_edited: false,
-          read_by: [user?.id || '']
-        },
-        {
-          id: '2',
-          chat_id: activeChat.id,
-          user_id: user?.id || '',
-          content: 'Hey there! I\'m doing well, thanks for asking. How about you?',
-          created_at: new Date(now.getTime() - 50 * 60000).toISOString(),
-          is_edited: false,
-          read_by: [user?.id || '', activeChat.participants.find(p => p.user_id !== user?.id)?.user_id || '']
-        },
-        {
-          id: '3',
-          chat_id: activeChat.id,
-          user_id: activeChat.participants.find(p => p.user_id !== user?.id)?.user_id || '',
-          content: 'I\'m great! Been working on that project we discussed last week.',
-          created_at: new Date(now.getTime() - 40 * 60000).toISOString(),
-          is_edited: true,
-          read_by: [user?.id || '']
-        },
-        {
-          id: '4',
-          chat_id: activeChat.id,
-          user_id: user?.id || '',
-          content: 'That sounds interesting! Any progress to share?',
-          created_at: new Date(now.getTime() - 30 * 60000).toISOString(),
-          is_edited: false,
-          read_by: [user?.id || '']
-        },
-        {
-          id: '5',
-          chat_id: activeChat.id,
-          user_id: activeChat.participants.find(p => p.user_id !== user?.id)?.user_id || '',
-          content: 'Yes! I\'ve completed the initial design and would love your feedback.',
-          created_at: new Date(now.getTime() - 20 * 60000).toISOString(),
-          is_edited: false,
-          read_by: []
-        }
-      ];
-
-      setTimeout(() => {
-        setMessages(mockMessages);
+      try {
+        // Fetch messages
+        const { data: messagesData, error: messagesError } = await supabase
+          .from('messages')
+          .select('*')
+          .eq('chat_id', activeChat.id)
+          .order('created_at', { ascending: true });
+          
+        if (messagesError) throw messagesError;
+        
+        // Fetch read status for each message
+        const messagesWithReadStatus = await Promise.all(
+          messagesData.map(async (message) => {
+            const { data: readData, error: readError } = await supabase
+              .from('message_read_status')
+              .select('user_id')
+              .eq('message_id', message.id);
+              
+            const readBy = readError ? [] : readData.map(r => r.user_id);
+            
+            // Fetch reactions
+            const { data: reactionData, error: reactionError } = await supabase
+              .from('message_reactions')
+              .select('user_id, emoji')
+              .eq('message_id', message.id);
+              
+            const reactions: MessageReaction[] = reactionError ? [] : 
+              reactionData.map(r => ({ user_id: r.user_id, emoji: r.emoji }));
+            
+            return {
+              ...message,
+              read_by: readBy,
+              reactions: reactions.length > 0 ? reactions : undefined
+            };
+          })
+        );
+        
+        setMessages(messagesWithReadStatus);
+        
+        // Mark messages as read
+        await markAsRead(activeChat.id);
+      } catch (error) {
+        console.error('Error fetching messages:', error);
+        toast({
+          title: "Failed to load messages",
+          description: "There was a problem loading messages.",
+          variant: "destructive",
+        });
+      } finally {
         setLoadingMessages(false);
-        // Mark chat as read
-        if (activeChat.unread_count && activeChat.unread_count > 0) {
-          setChats(prevChats => 
-            prevChats.map(chat => 
-              chat.id === activeChat.id ? { ...chat, unread_count: 0 } : chat
-            )
-          );
-        }
-      }, 500);
-    } else {
-      setMessages([]);
+      }
+    };
+    
+    fetchMessages();
+    
+    // Set up subscription for real-time messages
+    if (activeChat && user) {
+      const subscription = supabase
+        .channel(`messages-${activeChat.id}`)
+        .on('postgres_changes', {
+          event: '*',
+          schema: 'public',
+          table: 'messages',
+          filter: `chat_id=eq.${activeChat.id}`
+        }, () => {
+          fetchMessages();
+        })
+        .subscribe();
+        
+      setMessagesSubscription(subscription);
+      
+      return () => {
+        subscription.unsubscribe();
+      };
     }
-  }, [activeChat, user?.id]);
+  }, [activeChat, user, toast]);
+
+  // Clean up subscriptions
+  useEffect(() => {
+    return () => {
+      if (chatSubscription) {
+        chatSubscription.unsubscribe();
+      }
+      if (messagesSubscription) {
+        messagesSubscription.unsubscribe();
+      }
+    };
+  }, [chatSubscription, messagesSubscription]);
 
   const createChat = async (participantIds: string[], name?: string): Promise<Chat> => {
     try {
-      // Mock create chat - will be replaced with Supabase
-      const newChat: Chat = {
-        id: Math.random().toString(36).substring(2, 11),
-        name: name || null,
-        is_group: participantIds.length > 1,
-        created_at: new Date().toISOString(),
-        participants: [
-          { user_id: user?.id || '', joined_at: new Date().toISOString() },
-          ...participantIds.map(id => ({ 
-            user_id: id, 
+      if (!user) throw new Error('User not authenticated');
+      
+      // Create a new chat
+      const isGroup = participantIds.length > 1;
+      const { data: chatData, error: chatError } = await supabase
+        .from('chats')
+        .insert({
+          name: name || null,
+          is_group: isGroup,
+          created_at: new Date().toISOString()
+        })
+        .select()
+        .single();
+        
+      if (chatError) throw chatError;
+      
+      // Add current user as participant
+      await supabase
+        .from('chat_participants')
+        .insert({
+          chat_id: chatData.id,
+          user_id: user.id,
+          joined_at: new Date().toISOString()
+        });
+      
+      // Add other participants
+      const participantPromises = participantIds.map(id => 
+        supabase
+          .from('chat_participants')
+          .insert({
+            chat_id: chatData.id,
+            user_id: id,
+            joined_at: new Date().toISOString()
+          })
+      );
+      
+      await Promise.all(participantPromises);
+      
+      // Construct full chat object
+      const participants = await Promise.all([
+        {
+          user_id: user.id,
+          joined_at: new Date().toISOString(),
+          user
+        },
+        ...participantIds.map(async (id) => {
+          const userObj = users.find(u => u.id === id);
+          return {
+            user_id: id,
             joined_at: new Date().toISOString(),
-            user: users.find(u => u.id === id)
-          }))
-        ],
+            user: userObj
+          };
+        })
+      ]);
+      
+      const newChat: Chat = {
+        ...chatData,
+        participants,
         unread_count: 0
       };
-
+      
       setChats(prevChats => [...prevChats, newChat]);
       return newChat;
     } catch (error: any) {
+      console.error('Error creating chat:', error);
       toast({
         title: "Failed to create chat",
         description: error.message,
@@ -245,20 +416,42 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const sendMessage = async (content: string) => {
     try {
-      if (!activeChat || !user) return;
-
+      if (!activeChat || !user) throw new Error('No active chat or user');
+      
+      // Create message
+      const { data: messageData, error: messageError } = await supabase
+        .from('messages')
+        .insert({
+          chat_id: activeChat.id,
+          user_id: user.id,
+          content,
+          created_at: new Date().toISOString(),
+          updated_at: null,
+          is_edited: false
+        })
+        .select()
+        .single();
+        
+      if (messageError) throw messageError;
+      
+      // Mark as read by the sender
+      await supabase
+        .from('message_read_status')
+        .insert({
+          message_id: messageData.id,
+          user_id: user.id,
+          read_at: new Date().toISOString()
+        });
+      
+      // Update local state (optimistic update)
       const newMessage: Message = {
-        id: Math.random().toString(36).substring(2, 11),
-        chat_id: activeChat.id,
-        user_id: user.id,
-        content,
-        created_at: new Date().toISOString(),
-        is_edited: false,
-        read_by: [user.id]
+        ...messageData,
+        read_by: [user.id],
+        reactions: []
       };
-
+      
       setMessages(prevMessages => [...prevMessages, newMessage]);
-
+      
       // Update the last message in the chat list
       setChats(prevChats => 
         prevChats.map(chat => 
@@ -267,8 +460,8 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
             : chat
         )
       );
-
     } catch (error: any) {
+      console.error('Error sending message:', error);
       toast({
         title: "Failed to send message",
         description: error.message,
@@ -279,19 +472,41 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const editMessage = async (messageId: string, content: string) => {
     try {
+      if (!user) throw new Error('User not authenticated');
+      
+      // Check if user owns the message
+      const targetMessage = messages.find(m => m.id === messageId);
+      if (!targetMessage) throw new Error('Message not found');
+      if (targetMessage.user_id !== user.id) throw new Error('Cannot edit another user\'s message');
+      
+      const now = new Date().toISOString();
+      
+      const { error } = await supabase
+        .from('messages')
+        .update({
+          content,
+          updated_at: now,
+          is_edited: true
+        })
+        .eq('id', messageId);
+        
+      if (error) throw error;
+      
+      // Update local state
       setMessages(prevMessages => 
         prevMessages.map(message => 
           message.id === messageId 
-            ? { ...message, content, is_edited: true, updated_at: new Date().toISOString() } 
+            ? { ...message, content, is_edited: true, updated_at: now } 
             : message
         )
       );
-
+      
       toast({
         title: "Message edited",
         description: "Your message has been updated",
       });
     } catch (error: any) {
+      console.error('Error editing message:', error);
       toast({
         title: "Failed to edit message",
         description: error.message,
@@ -302,6 +517,34 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const deleteMessage = async (messageId: string) => {
     try {
+      if (!user) throw new Error('User not authenticated');
+      
+      // Check if user owns the message
+      const targetMessage = messages.find(m => m.id === messageId);
+      if (!targetMessage) throw new Error('Message not found');
+      if (targetMessage.user_id !== user.id) throw new Error('Cannot delete another user\'s message');
+      
+      // Delete message reactions
+      await supabase
+        .from('message_reactions')
+        .delete()
+        .eq('message_id', messageId);
+        
+      // Delete message read status
+      await supabase
+        .from('message_read_status')
+        .delete()
+        .eq('message_id', messageId);
+        
+      // Delete the message
+      const { error } = await supabase
+        .from('messages')
+        .delete()
+        .eq('id', messageId);
+        
+      if (error) throw error;
+      
+      // Update local state
       setMessages(prevMessages => prevMessages.filter(message => message.id !== messageId));
       
       toast({
@@ -309,6 +552,7 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
         description: "Your message has been removed",
       });
     } catch (error: any) {
+      console.error('Error deleting message:', error);
       toast({
         title: "Failed to delete message",
         description: error.message,
@@ -319,32 +563,69 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const addReaction = async (messageId: string, emoji: string) => {
     try {
-      if (!user) return;
+      if (!user) throw new Error('User not authenticated');
       
-      setMessages(prevMessages => 
-        prevMessages.map(message => {
-          if (message.id === messageId) {
-            const reactions = message.reactions || [];
-            const existingReaction = reactions.find(r => r.user_id === user.id && r.emoji === emoji);
-            
-            if (existingReaction) {
-              // Remove reaction if it already exists
+      const message = messages.find(m => m.id === messageId);
+      if (!message) throw new Error('Message not found');
+      
+      const existingReaction = message.reactions?.find(
+        r => r.user_id === user.id && r.emoji === emoji
+      );
+      
+      if (existingReaction) {
+        // Remove the reaction
+        const { error } = await supabase
+          .from('message_reactions')
+          .delete()
+          .eq('message_id', messageId)
+          .eq('user_id', user.id)
+          .eq('emoji', emoji);
+          
+        if (error) throw error;
+        
+        // Update local state
+        setMessages(prevMessages => 
+          prevMessages.map(message => {
+            if (message.id === messageId && message.reactions) {
               return {
                 ...message,
-                reactions: reactions.filter(r => !(r.user_id === user.id && r.emoji === emoji))
+                reactions: message.reactions.filter(
+                  r => !(r.user_id === user.id && r.emoji === emoji)
+                )
               };
-            } else {
-              // Add new reaction
+            }
+            return message;
+          })
+        );
+      } else {
+        // Add the reaction
+        const { error } = await supabase
+          .from('message_reactions')
+          .insert({
+            message_id: messageId,
+            user_id: user.id,
+            emoji,
+            created_at: new Date().toISOString()
+          });
+          
+        if (error) throw error;
+        
+        // Update local state
+        setMessages(prevMessages => 
+          prevMessages.map(message => {
+            if (message.id === messageId) {
+              const reactions = message.reactions || [];
               return {
                 ...message,
                 reactions: [...reactions, { user_id: user.id, emoji }]
               };
             }
-          }
-          return message;
-        })
-      );
+            return message;
+          })
+        );
+      }
     } catch (error: any) {
+      console.error('Error with reaction:', error);
       toast({
         title: "Failed to add reaction",
         description: error.message,
@@ -355,9 +636,31 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const markAsRead = async (chatId: string) => {
     try {
-      if (!user) return;
+      if (!user) throw new Error('User not authenticated');
       
-      // Mark all messages as read
+      // Get all unread messages in this chat
+      const unreadMessages = messages.filter(
+        m => m.chat_id === chatId && 
+             m.user_id !== user.id && 
+             !m.read_by.includes(user.id)
+      );
+      
+      if (unreadMessages.length === 0) return;
+      
+      // Mark all as read
+      const readPromises = unreadMessages.map(message => 
+        supabase
+          .from('message_read_status')
+          .insert({
+            message_id: message.id,
+            user_id: user.id,
+            read_at: new Date().toISOString()
+          })
+      );
+      
+      await Promise.all(readPromises);
+      
+      // Update local state
       setMessages(prevMessages => 
         prevMessages.map(message => {
           if (message.chat_id === chatId && !message.read_by.includes(user.id)) {
@@ -369,14 +672,15 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
           return message;
         })
       );
-
-      // Update unread count
+      
+      // Update unread count in the chat list
       setChats(prevChats => 
         prevChats.map(chat => 
           chat.id === chatId ? { ...chat, unread_count: 0 } : chat
         )
       );
     } catch (error: any) {
+      console.error('Error marking as read:', error);
       toast({
         title: "Failed to mark messages as read",
         description: error.message,
@@ -387,15 +691,48 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const searchMessages = async (query: string): Promise<Message[]> => {
     try {
-      // Simple client-side search for now
       if (!query.trim()) return [];
       
-      const searchResults = messages.filter(message => 
-        message.content.toLowerCase().includes(query.toLowerCase())
+      const { data, error } = await supabase
+        .from('messages')
+        .select('*')
+        .textSearch('content', query, { config: 'english' });
+        
+      if (error) throw error;
+      
+      // Format as Message objects
+      const searchResults: Message[] = await Promise.all(
+        data.map(async (message) => {
+          // Fetch read status
+          const { data: readData } = await supabase
+            .from('message_read_status')
+            .select('user_id')
+            .eq('message_id', message.id);
+            
+          const readBy = readData?.map(r => r.user_id) || [];
+          
+          // Fetch reactions
+          const { data: reactionData } = await supabase
+            .from('message_reactions')
+            .select('user_id, emoji')
+            .eq('message_id', message.id);
+            
+          const reactions: MessageReaction[] = reactionData?.map(r => ({
+            user_id: r.user_id,
+            emoji: r.emoji
+          })) || [];
+          
+          return {
+            ...message,
+            read_by: readBy,
+            reactions: reactions.length > 0 ? reactions : undefined
+          };
+        })
       );
       
       return searchResults;
     } catch (error: any) {
+      console.error('Search error:', error);
       toast({
         title: "Search failed",
         description: error.message,
